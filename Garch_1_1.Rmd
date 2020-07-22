@@ -1,0 +1,274 @@
+---
+title: "GARCH(1,1) Modeling using R"
+author: "Mritunjay"
+date: "July 22, 2020"
+output: html_document
+---
+
+```{r cars}
+install.packages(c("quantmod","rugarch","rmgarch"))   # only needed in case you have not yet installed these packages
+```
+
+## Load all the required libraries
+
+You can also embed plots, for example:
+
+```{r pressure, echo=FALSE}
+library(quantmod)
+library(rugarch)
+library(rmgarch)
+```
+
+### Set the working directory below
+```{r}
+setwd("C:/Users/MJ/Desktop/Career Preparation/Volatility Time Series/ARCH/GRACH")
+```
+
+
+### Get the data from quantmod package using the ticker symbol
+```{r}
+startDate = as.Date("2007-01-03") #Specify period of time we are interested in
+endDate = as.Date("2018-04-30")
+ 
+getSymbols("IBM", from = startDate, to = endDate)
+```
+
+
+```{r}
+getSymbols("GOOG", from = startDate, to = endDate)
+getSymbols("BP", from = startDate, to = endDate)
+```
+
+
+### Look the head of IBM ticker (what all data we have)
+```{r}
+head(IBM)
+```
+
+
+```{r}
+str(IBM)
+```
+
+
+```{r}
+chartSeries(GOOG)
+chartSeries(IBM)
+chartSeries(BP)
+```
+
+
+
+### When we are estimating volatility models we work with returns. There is a function that transforms the data to returns.
+
+```{r}
+rIBM <- dailyReturn(IBM)  # we can use weeklyReturn method to fnd the weekly return as well.
+rBP <- dailyReturn(BP)
+rGOOG <- dailyReturn(GOOG)
+
+
+# We put all data into a data frame for use in the multivariate model
+rX <- data.frame(rIBM, rBP, rGOOG)
+names(rX)[1] <- "rIBM"
+names(rX)[2] <- "rBP"
+names(rX)[3] <- "rGOOG"
+```
+
+
+## Univariate GARCH Model
+### We will use rugarch package (by Alexios Galanos) to do the GARCH Modeling
+### Let decide and fix which GARCH model we want to use and let R know about this. Even R provide some default Garch specification
+
+```{r}
+ug_spec = ugarchspec()
+ug_spec
+```
+
+
+### Let's say you want to change the mean model from an ARMA(1,1) to an ARMA(1,0), i.e. an AR(1) model.
+
+```{r}
+ug_spec <- ugarchspec(mean.model=list(armaOrder=c(1,0)))
+ug_spec
+```
+
+### How to make rugarch to EWMA (Have a look below)
+
+```{r}
+ewma_spec = ugarchspec(variance.model=list(model="iGARCH", garchOrder=c(1,1)), 
+        mean.model=list(armaOrder=c(0,0), include.mean=TRUE),  
+        distribution.model="norm", fixed.pars=list(omega=0))
+ewma_spec
+```
+
+
+### Model estimation
+
+```{r}
+ugfit = ugarchfit(spec = ug_spec, data = rIBM)
+ugfit
+```
+
+
+```{r}
+paste("Elements in the @model slot")
+```
+
+
+```{r}
+names(ugfit@model)
+```
+
+### Elements in the @fit slot
+```{r}
+names(ugfit@fit)
+```
+
+### Elements in the @fit@coef slot
+```{r}
+ugfit@fit$coef
+```
+
+
+```{r}
+ug_var <- ugfit@fit$var   # save the estimated conditional variances
+ug_res2 <- (ugfit@fit$residuals)^2   # save the estimated squared residuals
+```
+
+
+### Let's plot the squared residuals and the estimated conditional variance:
+```{r}
+plot(ug_res2, type = "l")
+lines(ug_var, col = "green")
+```
+
+
+### Model Forecasting
+```{r}
+ugfore <- ugarchforecast(ugfit, n.ahead = 10)
+ugfore
+```
+As you can see we have produced forecasts for the next ten days, both for the expected returns (Series) and for the conditional volatility (square root of the conditional variance). Similar to the object created for model fitting, ugfore contains two slots (@model and @forecast) and you can use names(ugfore@forecast) to figure out under which names the elements are saved. For instance you can extract the conditional volatility forecast as follows:
+
+
+```{r}
+ug_f <- ugfore@forecast$sigmaFor
+plot(ug_f, type = "l")
+
+```
+
+
+
+```{r}
+ug_var_t <- c(tail(ug_var,20),rep(NA,10))  # gets the last 20 observations
+ug_res2_t <- c(tail(ug_res2,20),rep(NA,10))  # gets the last 20 observations
+ug_f <- c(rep(NA,20),(ug_f)^2)
+
+plot(ug_res2_t, type = "l")
+lines(ug_f, col = "orange")
+lines(ug_var_t, col = "green")
+```
+
+
+### Multivariate GARCH models using rmgarch
+```{r}
+# DCC (MVN)
+uspec.n = multispec(replicate(3, ugarchspec(mean.model = list(armaOrder = c(1,0)))))
+
+```
+
+
+
+```{r}
+multf = multifit(uspec.n, rX)
+
+```
+
+
+
+```{r}
+spec1 = dccspec(uspec = uspec.n, dccOrder = c(1, 1), distribution = 'mvnorm')
+```
+
+
+### Model Estimation
+```{r}
+fit1 = dccfit(spec1, data = rX, fit.control = list(eval.se = TRUE), fit = multf)
+```
+
+
+
+```{r}
+# Get the model based time varying covariance (arrays) and correlation matrices
+cov1 = rcov(fit1)  # extracts the covariance matrix
+cor1 = rcor(fit1)  # extracts the correlation matrix
+dim(cor1)
+cor1[,,dim(cor1)[3]]
+```
+
+
+
+```{r}
+cor_BG <- cor1[2,1,]   # leaving the last dimension empty implies that we want all elements
+cor_BG <- as.xts(cor_BG)  # imposes the xts time series format - useful for plotting
+plot(cor_BG)
+```
+
+
+
+```{r}
+par(mfrow=c(3,1))  # this creates a frame with 3 windows to be filled by plots
+plot(as.xts(cor1[1,2,]),main="IBM and BP")
+plot(as.xts(cor1[1,3,]),main="IBM and Google")
+plot(as.xts(cor1[2,3,]),main="BP and Google")
+```
+
+
+### Forecasts
+### Often you will want to use your estimated model to produce forecasts for the covariance or correlation matrix
+```{r}
+dccf1 <- dccforecast(fit1, n.ahead = 10)
+dccf1
+```
+
+
+
+```{r}
+Rf <- dccf1@mforecast$R    # use H for the covariance forecast
+Rf
+```
+
+
+
+```{r}
+str(Rf)
+```
+
+
+
+```{r}
+corf_IB <- Rf[[1]][1,2,]  # Correlation forecasts between IBM and BP
+corf_IG <- Rf[[1]][1,3,]  # Correlation forecasts between IBM and Google
+corf_BG <- Rf[[1]][2,3,]  # Correlation forecasts between BP and Google
+corf_IB
+corf_IG
+corf_BG
+```
+
+```{r}
+par(mfrow=c(3,1))  # this creates a frame with 3 windows to be filled by plots
+c_IB <- c(tail(cor1[1,2,],20),rep(NA,10))  # gets the last 20 correlation observations
+cf_IB <- c(rep(NA,20),corf_IB) # gets the 10 forecasts
+plot(c_IB,type = "l",main="Correlation IBM and BP")
+lines(cf_IB,type = "l", col = "orange")
+
+c_IG <- c(tail(cor1[1,3,],20),rep(NA,10))  # gets the last 20 correlation observations
+cf_IG <- c(rep(NA,20),corf_IG) # gets the 10 forecasts
+plot(c_IG,type = "l",main="Correlation IBM and Google")
+lines(cf_IG,type = "l", col = "orange")
+
+c_BG <- c(tail(cor1[2,3,],20),rep(NA,10))  # gets the last 20 correlation observations
+cf_BG <- c(rep(NA,20),corf_BG) # gets the 10 forecasts
+plot(c_BG,type = "l",main="Correlation BP and Google")
+lines(cf_BG,type = "l", col = "orange")
+```
